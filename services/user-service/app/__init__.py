@@ -13,29 +13,11 @@ def create_app():
     app = Flask(__name__)
     app.config["MONGO_URI"] = Config.MONGO_URI
     
-    # Inicializar MongoDB
+    # Inicializar MongoDB PRIMERO
     mongo.init_app(app)
-    
-    # Configuración de Kafka
-    try:
-        from app.services.kafka_service import KafkaService
-        
-        # Esperar a que Kafka esté listo
-        KafkaService.wait_for_kafka()
-        
-        # Crear topics si no existen
-        KafkaService.create_topics()
-        
-        # Importar e iniciar consumidores (en segundo plano)
-        from app.events.user_events import start_event_consumers
-        start_event_consumers()
-        
-    except Exception as e:
-        logger.error(f"Failed to initialize Kafka: {str(e)}")
-        # Puedes decidir si quieres que la app falle completamente o continúe
-        # raise e  # Descomenta si quieres que falle si Kafka no está disponible
-    
-    # Registrar blueprints (import aquí para evitar circular imports)
+    logger.info("MongoDB initialized successfully")
+
+    # Registrar blueprints
     from app.routes.user_routes import user_bp
     app.register_blueprint(user_bp)
     
@@ -48,9 +30,34 @@ def create_app():
     @app.errorhandler(404)
     def not_found(error):
         return {"error": "Resource not found"}, 404
+
+    # Configuración de Kafka - en segundo plano
+    try:
+        from app.services.kafka_service import KafkaService
+        KafkaService.wait_for_kafka()
+        KafkaService.create_topics()
+        
+        # Mover la importación aquí para evitar circularidad
+        from app.services.user_service import handle_user_registration, handle_welcome_event
+        KafkaService.start_consumers_in_background(
+            Config.USER_TOPIC, 
+            'user-service-group', 
+            handle_user_registration
+        )
+        KafkaService.start_consumers_in_background(
+            Config.WELCOME_TOPIC, 
+            'welcome-service-group', 
+            handle_welcome_event
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize Kafka: {str(e)}")
+        if app.config.get("FLASK_ENV") == "production":
+            raise e
     
-    logger.info("Application initialized successfully")
     return app
 
-# Crear la aplicación Flask
 app = create_app()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)

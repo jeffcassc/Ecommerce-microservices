@@ -1,8 +1,7 @@
 from datetime import datetime
 from bson import ObjectId
 from flask_pymongo import PyMongo
-
-mongo = PyMongo()
+from app import mongo  # Importamos mongo desde app
 
 class User:
     @staticmethod

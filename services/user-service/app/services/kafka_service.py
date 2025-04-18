@@ -51,7 +51,10 @@ class KafkaService:
                     f.result()
                     logger.info(f"Topic {topic} created")
                 except Exception as e:
-                    if e.args[0].code() != KafkaException.TOPIC_ALREADY_EXISTS:
+                    # Kafka returns an error if the topic already exists, ignore it
+                    if 'Topic already exists' in str(e):
+                        logger.info(f"Topic {topic} already exists")
+                    else:
                         logger.error(f"Failed to create topic {topic}: {e}")
 
     @staticmethod
@@ -103,24 +106,33 @@ class KafkaService:
         try:
             logger.info(f"Starting consumer for topic {topic}")
             while True:
-                msg = consumer.poll(1.0)
-                if msg is None:
-                    continue
-                if msg.error():
-                    if msg.error().code() == KafkaException._PARTITION_EOF:
-                        continue
-                    logger.error(f"Consumer error: {msg.error()}")
-                    continue
-
                 try:
+                    msg = consumer.poll(1.0)
+                    if msg is None:
+                        continue
+                    if msg.error():
+                        if msg.error().code() == KafkaException._PARTITION_EOF:
+                            continue
+                        logger.error(f"Consumer error: {msg.error()}")
+                        continue
+
                     event = json.loads(msg.value().decode('utf-8'))
                     logger.info(f"Received event from {topic}: {event}")
                     callback(event)
                     consumer.commit(asynchronous=False)
                 except Exception as e:
-                    logger.error(f"Error processing message: {str(e)}")
-                    
+                    logger.error(f"Error processing message in consumer loop: {str(e)}")
         except KeyboardInterrupt:
             pass
         finally:
             consumer.close()
+    
+    @staticmethod
+    def start_consumers_in_background(topic, group_id, callback):
+        """Inicia consumidores en segundo plano"""
+        from threading import Thread
+        Thread(target=lambda: KafkaService.consume_events(
+            topic,
+            group_id,
+            callback
+        )).start()

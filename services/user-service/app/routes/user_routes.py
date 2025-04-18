@@ -2,6 +2,9 @@ from flask import Blueprint, request, jsonify
 from app.services.user_service import UserService
 from bson import ObjectId
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 user_bp = Blueprint('user', __name__, url_prefix='/api/users')
 
@@ -9,6 +12,11 @@ user_bp = Blueprint('user', __name__, url_prefix='/api/users')
 def register():
     try:
         data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+            
+        logger.info(f"Received registration data: {data}")
+        
         user = UserService.register_user(data)
         return jsonify({
             "message": "User registered successfully",
@@ -16,8 +24,10 @@ def register():
             "user_uuid": user['user_id']
         }), 201
     except ValueError as e:
+        logger.error(f"Validation error: {str(e)}")
         return jsonify({"error": str(e)}), 400
     except Exception as e:
+        logger.error(f"Unexpected error in registration: {str(e)}", exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
 
 @user_bp.route('/<user_id>', methods=['GET'])

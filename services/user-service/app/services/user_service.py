@@ -20,7 +20,7 @@ class UserService:
         if User.get_by_email(user_data['email']):
             raise ValueError("User already exists")
 
-        # Hash de la contraseña (básico, en producción usar algo más seguro)
+        # Hash de la contraseña
         user_data['password'] = hashlib.sha256(user_data['password'].encode()).hexdigest()
         user_data['user_id'] = str(uuid.uuid4())
 
@@ -28,7 +28,7 @@ class UserService:
         user_id = User.create(user_data)
         user = User.get_by_id(user_id)
 
-        # Publicar evento de registro
+        # Publicar eventos
         KafkaService.produce_event(
             topic=Config.USER_TOPIC,
             source="UserService",
@@ -39,11 +39,10 @@ class UserService:
             }
         )
 
-        # Publicar evento de bienvenida
         welcome_payload = {
             "to": user['email'],
-            "subject": "¡Bienvenido a nuestra plataforma!",
-            "content": f"Hola {user['name']}, gracias por registrarte en nuestro e-commerce."
+            "subject": "¡Bienvenido!",
+            "content": f"Hola {user['name']}, gracias por registrarte."
         }
 
         KafkaService.produce_event(
@@ -56,7 +55,13 @@ class UserService:
 
     @staticmethod
     def get_user(user_id):
-        user = User.get_by_id(user_id)
+        try:
+            if not ObjectId.is_valid(user_id):
+                raise ValueError("Invalid user ID format")
+            user_obj_id = ObjectId(user_id)
+        except Exception:
+            raise ValueError("Invalid user ID format")
+        user = User.get_by_id(user_obj_id)
         if not user:
             raise ValueError("User not found")
         return user
@@ -67,6 +72,12 @@ class UserService:
 
     @staticmethod
     def update_user(user_id, update_data):
+        try:
+            if not ObjectId.is_valid(user_id):
+                raise ValueError("Invalid user ID format")
+            user_obj_id = ObjectId(user_id)
+        except Exception:
+            raise ValueError("Invalid user ID format")
         schema = UserUpdateSchema()
         errors = schema.validate(update_data)
         if errors:
@@ -77,11 +88,11 @@ class UserService:
             if existing_user and str(existing_user['_id']) != user_id:
                 raise ValueError("Email already in use")
 
-        result = User.update(user_id, update_data)
+        result = User.update(user_obj_id, update_data)
         if result.modified_count == 0:
             raise ValueError("User not found or no changes made")
 
-        user = User.get_by_id(user_id)
+        user = User.get_by_id(user_obj_id)
         
         # Publicar evento de actualización
         KafkaService.produce_event(
@@ -98,11 +109,17 @@ class UserService:
 
     @staticmethod
     def delete_user(user_id):
-        user = User.get_by_id(user_id)
+        try:
+            if not ObjectId.is_valid(user_id):
+                raise ValueError("Invalid user ID format")
+            user_obj_id = ObjectId(user_id)
+        except Exception:
+            raise ValueError("Invalid user ID format")
+        user = User.get_by_id(user_obj_id)
         if not user:
             raise ValueError("User not found")
 
-        result = User.delete(user_id)
+        result = User.delete(user_obj_id)
         if result.deleted_count == 0:
             raise ValueError("User not found")
 
