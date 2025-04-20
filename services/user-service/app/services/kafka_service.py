@@ -7,9 +7,17 @@ from datetime import datetime
 from uuid import uuid4
 from app.config import Config
 from app.services.mongo_service import save_event_to_mongo
+from json import JSONEncoder
+from bson import ObjectId
+from bson import json_util
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+class DateTimeEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (datetime, ObjectId)):
+            return str(obj)
+        return super().default(obj)
 
 class KafkaService:
     @staticmethod
@@ -67,12 +75,11 @@ class KafkaService:
 
     @staticmethod
     def produce_event(topic, source, payload, snapshot=None):
-        """Produce un evento a Kafka y lo guarda en MongoDB"""
         producer = KafkaService.get_producer()
         
         event = {
             "eventId": str(uuid4()),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.utcnow(),  # Mantenemos como datetime
             "source": source,
             "topic": topic,
             "payload": payload,
@@ -80,15 +87,20 @@ class KafkaService:
         }
 
         try:
-            producer.produce(topic, json.dumps(event))
+            # Serializar usando nuestro encoder personalizado
+            serialized_event = json.dumps(event, cls=DateTimeEncoder)
+            producer.produce(topic, serialized_event)
             producer.flush()
-            logger.info(f"Event produced to {topic}: {event}")
+            logger.info(f"Event produced to {topic}")
             
             # Guardar en MongoDB
-            save_event_to_mongo(event)
-            
+            from app import app
+            with app.app_context():
+                from app.services.mongo_service import save_event_to_mongo
+                save_event_to_mongo(event)
+                
         except Exception as e:
-            logger.error(f"Failed to produce event to {topic}: {str(e)}")
+            logger.error(f"Failed to produce event to {topic}: {str(e)}", exc_info=True)
             raise
 
     @staticmethod

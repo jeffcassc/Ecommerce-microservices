@@ -6,6 +6,10 @@ from app.config import Config
 from bson import ObjectId
 import hashlib
 import uuid
+from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 class UserService:
     @staticmethod
@@ -28,14 +32,18 @@ class UserService:
         user_id = User.create(user_data)
         user = User.get_by_id(user_id)
 
-        # Publicar eventos
+        # Publicar eventos (manejar serialización de fechas)
+        user_data_for_event = user_data.copy()
+        user_data_for_event.pop('password', None)  # No enviar contraseña en el evento
+        
         KafkaService.produce_event(
             topic=Config.USER_TOPIC,
             source="UserService",
-            payload=user_data,
+            payload=user_data_for_event,
             snapshot={
                 "userId": user['user_id'],
-                "status": "REGISTERED"
+                "status": "REGISTERED",
+                "timestamp": datetime.utcnow().isoformat()
             }
         )
 
@@ -46,9 +54,17 @@ class UserService:
         }
 
         KafkaService.produce_event(
-            topic=Config.WELCOME_TOPIC,
+            topic=Config.USER_TOPIC,
             source="UserService",
-            payload=welcome_payload
+            payload={
+                **user_data_for_event,
+                "registration_timestamp": datetime.utcnow().isoformat()
+            },
+            snapshot={
+                "userId": user['user_id'],
+                "status": "REGISTERED",
+                "timestamp": datetime.utcnow().isoformat()
+            }
         )
 
         return user
@@ -68,7 +84,8 @@ class UserService:
 
     @staticmethod
     def get_all_users():
-        return User.get_all()
+        users = User.get_all()
+        return users
 
     @staticmethod
     def update_user(user_id, update_data):
@@ -78,6 +95,7 @@ class UserService:
             user_obj_id = ObjectId(user_id)
         except Exception:
             raise ValueError("Invalid user ID format")
+            
         schema = UserUpdateSchema()
         errors = schema.validate(update_data)
         if errors:
@@ -98,13 +116,16 @@ class UserService:
         KafkaService.produce_event(
             topic="user-updates",
             source="UserService",
-            payload=update_data,
+            payload={
+                **update_data,
+                "update_timestamp": datetime.utcnow().isoformat()  # Fecha como string
+            },
             snapshot={
                 "userId": user['user_id'],
-                "status": "UPDATED"
+                "status": "UPDATED",
+                "timestamp": datetime.utcnow().isoformat()  # Fecha como string
             }
         )
-
         return user
 
     @staticmethod
@@ -115,6 +136,7 @@ class UserService:
             user_obj_id = ObjectId(user_id)
         except Exception:
             raise ValueError("Invalid user ID format")
+            
         user = User.get_by_id(user_obj_id)
         if not user:
             raise ValueError("User not found")
@@ -130,7 +152,8 @@ class UserService:
             payload={"userId": user['user_id']},
             snapshot={
                 "userId": user['user_id'],
-                "status": "DELETED"
+                "status": "DELETED",
+                "timestamp": datetime.utcnow().isoformat()
             }
         )
 
@@ -158,8 +181,24 @@ class UserService:
             payload={"email": login_data['email']},
             snapshot={
                 "userId": user['user_id'],
-                "status": "LOGGED_IN"
+                "status": "LOGGED_IN",
+                "timestamp": datetime.utcnow().isoformat()
             }
         )
 
         return {"message": "Login successful", "user_id": user['user_id']}
+
+# Handlers de eventos (deben estar al final para evitar importaciones circulares)
+def handle_user_registration(event):
+    try:
+        save_event_to_mongo(event)
+        logger.info(f"User registration event saved: {event}")
+    except Exception as e:
+        logger.error(f"Error handling user registration: {e}")
+
+def handle_welcome_event(event):
+    try:
+        save_event_to_mongo(event)
+        logger.info(f"Welcome event saved: {event}")
+    except Exception as e:
+        logger.error(f"Error handling welcome event: {e}")
