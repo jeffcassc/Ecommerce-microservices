@@ -15,7 +15,7 @@ def save_event_to_mongo(event):
         # Convertir el evento a un formato compatible con MongoDB
         event_to_store = event.copy()
         
-        
+        # Asegurar que las fechas estén en formato ISO string
         if 'timestamp' in event_to_store and isinstance(event_to_store['timestamp'], datetime):
             event_to_store['timestamp'] = event_to_store['timestamp'].isoformat()
         
