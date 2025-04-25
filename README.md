@@ -48,7 +48,7 @@ GET http://localhost:5000/health
 
 # **Consultas a MongoDB**
 # Conectarse a MongoDB
-docker exec -it user-service_mongo_1 mongosh ecommerce
+docker exec -it services-mongo-1 mongosh
 
 # Consultar usuarios registrados
 db.users.find().pretty()
