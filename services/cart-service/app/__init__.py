@@ -1,10 +1,12 @@
 from flask import Flask
 from flask_pymongo import PyMongo
 import logging
-from app.config import Config
+from shared.kafka_config import KafkaConfig
 from threading import Thread
 import time
+from shared.kafka_service import KafkaService
 
+import os
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -20,7 +22,6 @@ def initialize_kafka():
     
     for attempt in range(max_retries):
         try:
-            from app.services.kafka_service import KafkaService
             KafkaService.wait_for_kafka(max_retries=10, delay=2)
             KafkaService.create_topics()
             
@@ -32,13 +33,13 @@ def initialize_kafka():
             
             # Start consumers in separate threads
             Thread(target=lambda: KafkaService.consume_events(
-                Config.CART_UPDATES_TOPIC,
+                KafkaConfig.CART_UPDATES_TOPIC,
                 'cart-service-group',
                 handle_cart_updated
             )).start()
 
             Thread(target=lambda: KafkaService.consume_events(
-                Config.CART_REMOVALS_TOPIC,
+                KafkaConfig.CART_REMOVALS_TOPIC,
                 'cart-service-group',
                 handle_cart_item_removed
             )).start()
@@ -50,17 +51,15 @@ def initialize_kafka():
             logger.error(f"Attempt {attempt + 1}/{max_retries} - Kafka initialization failed: {str(e)}")
             if attempt == max_retries - 1:
                 logger.error("Max retries reached for Kafka initialization")
-                if Config.FLASK_ENV == "production":
-                    raise
-                return False
+                raise
             time.sleep(retry_delay)
 
 def create_app():
     app = Flask(__name__)
-    app.config.from_object(Config)
+    app.config.from_object('app.config.Config')
     
     # Additional configuration
-    app.config["MONGO_URI"] = Config.MONGO_URI
+    app.config["MONGO_URI"] = os.getenv('MONGO_URI', 'mongodb://mongo:27017/ecommerce')
     app.config["PROPAGATE_EXCEPTIONS"] = True
 
     # Initialize MongoDB first
@@ -74,8 +73,7 @@ def create_app():
             
     except Exception as e:
         logger.error(f"MongoDB initialization failed: {str(e)}")
-        if Config.FLASK_ENV == "production":
-            raise
+        raise
 
     # Register blueprints
     from app.routes.cart_routes import cart_bp
@@ -104,10 +102,8 @@ def create_app():
             with app.app_context():
                 mongo.db.command('ping')
             
-            # Check Kafka (if in production)
-            if Config.FLASK_ENV == "production":
-                from app.services.kafka_service import KafkaService
-                KafkaService.get_producer().list_topics(timeout=10)
+            # Check Kafka
+            KafkaService.get_producer().list_topics(timeout=10)
                 
             return {"status": "healthy", "services": ["mongodb", "kafka"]}, 200
         except Exception as e:
@@ -115,8 +111,7 @@ def create_app():
             return {"status": "unhealthy", "error": str(e)}, 500
 
     # Initialize Kafka in background (with retries)
-    if Config.FLASK_ENV != "testing":
-        Thread(target=initialize_kafka).start()
+    Thread(target=initialize_kafka).start()
 
     logger.info("Cart Service initialization completed")
     return app
@@ -124,4 +119,4 @@ def create_app():
 app = create_app()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5002, debug=Config.FLASK_ENV == "development")
+    app.run(host="0.0.0.0", port=5002, debug=os.getenv('FLASK_ENV') == "development")

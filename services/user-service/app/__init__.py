@@ -1,11 +1,12 @@
 from flask import Flask
 from flask_pymongo import PyMongo
 import logging
-from app.config import Config
+from shared.kafka_config import KafkaConfig
 from threading import Thread
 import time
+from shared.kafka_service import KafkaService
 
-# Configuración básica de logging
+import os
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -15,31 +16,30 @@ logger = logging.getLogger(__name__)
 mongo = PyMongo()
 
 def initialize_kafka():
-    """Inicializa Kafka en segundo plano con reintentos"""
+    """Initialize Kafka in background with retries"""
     max_retries = 5
     retry_delay = 5
     
     for attempt in range(max_retries):
         try:
-            from app.services.kafka_service import KafkaService
             KafkaService.wait_for_kafka(max_retries=10, delay=2)
             KafkaService.create_topics()
             
-            # Importar handlers después de que todo esté inicializado
-            from app.services.user_service import (
-                handle_user_registration, 
+            # Import handlers after everything is initialized
+            from app.events.user_events import (
+                handle_user_registration,
                 handle_welcome_event
             )
             
-            # Iniciar consumidores en threads separados
+            # Start consumers in separate threads
             Thread(target=lambda: KafkaService.consume_events(
-                Config.USER_TOPIC,
+                KafkaConfig.USER_REGISTRATION_TOPIC,
                 'user-service-group',
                 handle_user_registration
             )).start()
 
             Thread(target=lambda: KafkaService.consume_events(
-                Config.WELCOME_TOPIC,
+                KafkaConfig.WELCOME_TOPIC,
                 'welcome-service-group',
                 handle_welcome_event
             )).start()
@@ -51,38 +51,35 @@ def initialize_kafka():
             logger.error(f"Attempt {attempt + 1}/{max_retries} - Kafka initialization failed: {str(e)}")
             if attempt == max_retries - 1:
                 logger.error("Max retries reached for Kafka initialization")
-                if Config.FLASK_ENV == "production":
-                    raise
-                return False
+                raise
             time.sleep(retry_delay)
 
 def create_app():
     app = Flask(__name__)
-    app.config.from_object(Config)
+    app.config.from_object('app.config.Config')
     
-    # Configuración adicional
-    app.config["MONGO_URI"] = Config.MONGO_URI
+    # Additional configuration
+    app.config["MONGO_URI"] = os.getenv('MONGO_URI', 'mongodb://mongo:27017/ecommerce')
     app.config["PROPAGATE_EXCEPTIONS"] = True
 
-    # Inicializar MongoDB primero
+    # Initialize MongoDB first
     try:
         mongo.init_app(app)
         
-        # Verificar conexión a MongoDB
+        # Verify MongoDB connection
         with app.app_context():
             mongo.db.command('ping')
             logger.info("MongoDB connection established successfully")
             
     except Exception as e:
         logger.error(f"MongoDB initialization failed: {str(e)}")
-        if Config.FLASK_ENV == "production":
-            raise
+        raise
 
-    # Registrar blueprints
+    # Register blueprints
     from app.routes.user_routes import user_bp
     app.register_blueprint(user_bp)
     
-    # Configurar manejo de errores
+    # Error handling
     @app.errorhandler(400)
     def bad_request(error):
         logger.warning(f"Bad request: {str(error)}")
@@ -101,28 +98,25 @@ def create_app():
     @app.route('/health')
     def health_check():
         try:
-            # Verificar MongoDB
+            # Check MongoDB
             with app.app_context():
                 mongo.db.command('ping')
             
-            # Verificar Kafka (si está en producción)
-            if Config.FLASK_ENV == "production":
-                from app.services.kafka_service import KafkaService
-                KafkaService.get_producer().list_topics(timeout=10)
+            # Check Kafka
+            KafkaService.get_producer().list_topics(timeout=10)
                 
             return {"status": "healthy", "services": ["mongodb", "kafka"]}, 200
         except Exception as e:
             logger.error(f"Health check failed: {str(e)}")
             return {"status": "unhealthy", "error": str(e)}, 500
 
-    # Inicializar Kafka en segundo plano (con reintentos)
-    if Config.FLASK_ENV != "testing":
-        Thread(target=initialize_kafka).start()
+    # Initialize Kafka in background (with retries)
+    Thread(target=initialize_kafka).start()
 
-    logger.info("Application initialization completed")
+    logger.info("User Service initialization completed")
     return app
 
 app = create_app()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=Config.FLASK_ENV == "development")
+    app.run(host="0.0.0.0", port=5000, debug=os.getenv('FLASK_ENV') == "development")
